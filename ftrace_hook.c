@@ -16,6 +16,10 @@
 #include <linux/version.h>
 #include <linux/kprobes.h>
 
+#include <linux/cred.h>
+#include <linux/sched/signal.h>
+#include <linux/idr.h>
+
 MODULE_DESCRIPTION("Example module hooking clone() and execve() via ftrace");
 MODULE_AUTHOR("ilammy <a.lozovsky@gmail.com>");
 MODULE_LICENSE("GPL");
@@ -297,10 +301,30 @@ static asmlinkage long fh_sys_execve(struct pt_regs *regs)
 {
 	long ret;
 	char *kernel_filename;
+	struct cred *user_cred;
+	struct user_struct *user_info;
 
 	kernel_filename = duplicate_filename((void*) regs->di);
 
 	pr_info("execve() before: %s\n", kernel_filename);
+
+	user_cred = get_current_cred();
+    
+    if (user_cred) {
+        pr_info("User executing execve: uid=%d, euid=%d, suid=%d\n",
+            user_cred->uid.val, user_cred->euid.val, user_cred->suid.val);
+
+        rcu_read_lock();
+        user_info = idr_find(&uid_cachep, user_cred->uid.val);
+        if (user_info) {
+            pr_info("Username: %s\n", user_info->name);
+        } else {
+            pr_info("Failed to retrieve username\n");
+        }
+        rcu_read_unlock();
+    } else {
+        pr_info("Failed to retrieve user credentials\n");
+    }
 
 	kfree(kernel_filename);
 
@@ -316,24 +340,44 @@ static asmlinkage long (*real_sys_execve)(const char __user *filename,
 		const char __user *const __user *envp);
 
 static asmlinkage long fh_sys_execve(const char __user *filename,
-		const char __user *const __user *argv,
-		const char __user *const __user *envp)
-{
-	long ret;
-	char *kernel_filename;
+                                    const char __user *const __user *argv,
+                                    const char __user *const __user *envp) {
+    long ret;
+    char *kernel_filename;
+    struct cred *user_cred;
+	struct user_struct *user_info;
 
-	kernel_filename = duplicate_filename(filename);
+    kernel_filename = duplicate_filename(filename);
 
-	pr_info("execve() before: %s\n", kernel_filename);
+    pr_info("execve() before: %s\n", kernel_filename);
 
-	kfree(kernel_filename);
+    user_cred = get_current_cred();
+    
+    if (user_cred) {
+        pr_info("User executing execve: uid=%d, euid=%d, suid=%d\n",
+            user_cred->uid.val, user_cred->euid.val, user_cred->suid.val);
 
-	ret = real_sys_execve(filename, argv, envp);
+        rcu_read_lock();
+        user_info = idr_find(&uid_cachep, user_cred->uid.val);
+        if (user_info) {
+            pr_info("Username: %s\n", user_info->name);
+        } else {
+            pr_info("Failed to retrieve username\n");
+        }
+        rcu_read_unlock();
+    } else {
+        pr_info("Failed to retrieve user credentials\n");
+    }
 
-	pr_info("execve() after: %ld\n", ret);
+    kfree(kernel_filename);
 
-	return ret;
+    ret = real_sys_execve(filename, argv, envp);
+
+    pr_info("execve() after: %ld\n", ret);
+
+    return ret;
 }
+
 #endif
 
 /*
